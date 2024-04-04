@@ -1,17 +1,19 @@
 import { WebSocketServer, WebSocket } from "ws";
-import { Client, ClientRank } from "./client.js";
-import { encodeImage, encodeText } from "./protocol.js";
-import { IP } from "./ip.js";
-import { Canvas } from "canvas";
+import { Client, ClientRank } from "./utils/client.js";
+import { encodeImage, encodeText } from "./utils/protocol.js";
+import { IP } from "./utils/ip.js";
+import { Canvas, createCanvas } from "canvas";
 import { IncomingMessage } from "http";
 
-import VM from "./vm.js";
-import Turns from "./turns.js";
-import Chat from "./chat.js";
-import ChatMessage from "./chatMessage.js";
+import VM from "./utils/vm.js";
+import Turns from "./utils/turns.js";
+import Chat from "./utils/chat.js";
+import ChatMessage from "./utils/chatMessage.js";
 
 interface PenisVMServerParams {
   port: number;
+  serverName: string;
+  serverDescription: string;
   vnc: {
     host: string;
     port: number;
@@ -32,6 +34,7 @@ export default class PenisVMServer {
   private vm: VM;
   private turns: Turns;
   private chat: Chat;
+  private params: PenisVMServerParams;
 
   constructor(params: PenisVMServerParams) {
     this.socketServer = new WebSocketServer({
@@ -40,6 +43,7 @@ export default class PenisVMServer {
 
     this.clients = [];
     this.ips = [];
+    this.params = params;
 
     this.vm = new VM({ vnc: params.vnc, qmp: params.qmp });
     this.vm.start();
@@ -119,8 +123,16 @@ export default class PenisVMServer {
     });
   }
 
-  private onMessage(client: Client, message: any) {
+  private async onMessage(client: Client, message: any) {
     switch (message.type) {
+      case "getServerInfo":
+        client.sendMessage(encodeText(JSON.stringify({
+          type: "serverInfo",
+          serverName: this.params.serverName,
+          serverDescription: this.params.serverDescription,
+          thumbnail: await this.getThumbnail()
+        })));
+        break;
       case "connect":
         if (client.connected) {
           client.closeConnection();
@@ -141,6 +153,11 @@ export default class PenisVMServer {
         }
 
         client.connected = true;
+
+        client.sendMessage(encodeText(JSON.stringify({
+          type: "connected",
+          userRank: client.userRank
+        })));
 
         // send "addUser" opcode to all clients EXECPT the one that's just connnected
         this.clients
@@ -187,7 +204,7 @@ export default class PenisVMServer {
 
         const sysGreetingMessage = new ChatMessage(
           `${client.username} has joined.`,
-          null,
+          undefined,
           true
         );
 
@@ -201,11 +218,6 @@ export default class PenisVMServer {
 
         client.sendMessage(encodeImage(jpg));
         this.turns.sendTurnUpdate();
-
-        // not used on the offical client but bots might want it anyway
-        client.sendMessage(encodeText(JSON.stringify({
-          type: "connected"
-        })))
 
         break;
       case "mouse":
@@ -329,7 +341,7 @@ export default class PenisVMServer {
     }
 
     this.clients
-      .filter((client) => client.connected == true)
+      .filter((client) => client.connected == true && client.username)
       .forEach((client) => {
         client.sendMessage(
           encodeText(
@@ -352,7 +364,7 @@ export default class PenisVMServer {
       chromaSubsampling: true,
     });
 
-    this.clients.forEach((client) => {
+    this.clients.filter((client) => client.connected).forEach((client) => {
       client.sendMessage(encodeImage(jpg));
     });
   }
@@ -369,5 +381,17 @@ export default class PenisVMServer {
         )
       );
     });
+  }
+
+  private getThumbnail() {
+    return new Promise(async (res, rej) => {
+      const canvas = createCanvas(400, 300);
+      const canvasCtx = canvas.getContext("2d");
+
+      canvasCtx.drawImage(this.vm.framebuffer, 0, 0, 400, 300);
+
+      const jpg = canvas.toBuffer("image/jpeg");
+      res(jpg.toString("base64"));
+    })
   }
 }

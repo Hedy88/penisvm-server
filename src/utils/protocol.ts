@@ -20,4 +20,3 @@ const encodeText = (str: string): Buffer => {
 };
 
 export { encodeImage, encodeText };
-
